@@ -35,6 +35,8 @@ import javax.faces.component.UIComponentBase;
 import javax.faces.context.FacesContext;
 
 import org.richfaces.component.AbstractMediaOutput;
+import org.richfaces.log.Logger;
+import org.richfaces.log.RichfacesLogger;
 
 import com.google.common.base.Strings;
 
@@ -44,12 +46,26 @@ import com.google.common.base.Strings;
  */
 @DynamicResource
 public class MediaOutputResource extends AbstractUserResource implements StateHolder, CacheableResource {
+    private static final Logger LOGGER = RichfacesLogger.RESOURCE.getLogger();
+
+    /**
+     * Strict allowlist for the {@code createContent} method-expression reconstructed from a client-supplied
+     * resource request (the {@code do=} URL parameter). An attacker who can forge that parameter controls the
+     * {@link MethodExpression} instance restored in {@link #restoreState}; if we invoked it blindly we would
+     * give them arbitrary EL / remote code execution (see CVE-2013-2165, CVE-2018-14667).
+     *
+     * Legitimate usage is always a simple method reference of the form {@code #{bean.method}} or
+     * {@code #{a.b.c}}. This pattern enforces exactly that -- no literals, no brackets, no parentheses,
+     * no operators, no whitespace tricks. Anything else is rejected.
+     */
+    private static final Pattern SAFE_METHOD_EXPRESSION = Pattern.compile(
+        "^#\\{[\\p{Alpha}_$][\\p{Alnum}_$]*(?:\\.[\\p{Alpha}_$][\\p{Alnum}_$]*)*\\}$");
+
     private String contentType;
     private boolean cacheable;
     private MethodExpression contentProducer;
     private ValueExpression expiresExpression;
 
-    private static final String PARENTHESES = "[^\\(]*";
     /*
      * TODO: add handling for expressions:
      *
@@ -61,14 +77,35 @@ public class MediaOutputResource extends AbstractUserResource implements StateHo
     private String fileName;
 
     public void encode(FacesContext facesContext) throws IOException {
+        // Defense-in-depth: restoreState() already validated the expression, but we re-check here in case
+        // a different code path populated contentProducer.
+        verifyContentProducer(contentProducer);
+
         OutputStream outStream = facesContext.getExternalContext().getResponseOutputStream();
-        String expr = contentProducer.getExpressionString();
-
-        if (!Pattern.matches(PARENTHESES, expr)) { // method expression must not be executed
-            throw new IllegalArgumentException("Expression \"" + expr + "\" contains parentheses.");
-        }
-
         contentProducer.invoke(facesContext.getELContext(), new Object[] { outStream, userData });
+    }
+
+    /**
+     * Reject any {@link MethodExpression} whose expression string is not a trivial bean method reference.
+     * Called from both {@link #restoreState} (fail-closed before any further processing) and
+     * {@link #encode} (defense-in-depth in case a different path set the field).
+     *
+     * @throws IllegalStateException if the expression is null or does not match {@link #SAFE_METHOD_EXPRESSION}.
+     */
+    // Package-private for unit tests.
+    static void verifyContentProducer(MethodExpression expression) {
+        if (expression == null) {
+            throw new IllegalStateException("MediaOutputResource has no createContent expression.");
+        }
+        String expr = expression.getExpressionString();
+        if (expr == null || !SAFE_METHOD_EXPRESSION.matcher(expr).matches()) {
+            // Do NOT include the raw expression in the log or exception message -- avoids log
+            // injection and keeps attacker payloads out of server logs.
+            LOGGER.warn("Rejected unsafe createContent expression on MediaOutputResource "
+                + "(length=" + (expr == null ? -1 : expr.length()) + ").");
+            throw new IllegalStateException("MediaOutputResource createContent expression is not a "
+                + "simple method reference and was rejected.");
+        }
     }
 
     public boolean isTransient() {
@@ -100,6 +137,10 @@ public class MediaOutputResource extends AbstractUserResource implements StateHo
         userData = UIComponentBase.restoreAttachedState(context, state[2]);
         contentProducer = (MethodExpression) UIComponentBase.restoreAttachedState(context, state[3]);
         fileName = (String) state[4];
+
+        // The state we just restored came from the client-controlled 'do=' URL parameter. Validate the
+        // restored expression immediately so we never hold an exploitable MethodExpression in memory.
+        verifyContentProducer(contentProducer);
     }
 
     // TODO use ResourceComponent or exchange object as argument?
