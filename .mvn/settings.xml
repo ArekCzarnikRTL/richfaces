@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Project-local Maven settings for building RichFaces 4.5 in 2026.
+
+  Two problems this file works around:
+
+  1. jboss-parent:11 (the POM this project inherits from) declares several
+     http:// repositories. Maven 3.9+ refuses to talk to http:// endpoints
+     by default, so dependency resolution dies with
+     "Blocked mirror for repositories" errors.
+
+  2. A handful of legacy dependencies (jbosscache-core, jboss-el,
+     jboss-test-jsf) were never published to Maven Central. They still
+     live in the JBoss public Nexus.
+
+  What this file does:
+
+  * Adds https://repository.jboss.org/nexus/content/groups/public/ as an
+    additional resolution source, both for dependencies and plugins.
+  * Rewrites every http:// mirror lookup to HTTPS Maven Central so the
+    inherited jboss-parent:11 repo declarations stop blocking the build.
+
+  Usage:
+
+      mvn -s .mvn/settings.xml <goals>
+
+  To avoid typing -s every time, the sibling file .mvn/maven.config passes
+  that flag automatically when mvn is invoked from the project root.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <profiles>
+    <profile>
+      <id>rf-legacy-repos</id>
+      <repositories>
+        <repository>
+          <id>jboss-public</id>
+          <url>https://repository.jboss.org/nexus/content/groups/public/</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </repository>
+        <repository>
+          <id>central-https</id>
+          <url>https://repo.maven.apache.org/maven2</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <pluginRepository>
+          <id>jboss-public-plugins</id>
+          <url>https://repository.jboss.org/nexus/content/groups/public/</url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>true</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+    </profile>
+  </profiles>
+  <activeProfiles>
+    <activeProfile>rf-legacy-repos</activeProfile>
+  </activeProfiles>
+  <mirrors>
+    <mirror>
+      <id>https-central-for-http</id>
+      <!-- Only rewrite http://* repos to https central; leave jboss-public alone. -->
+      <mirrorOf>external:http:*</mirrorOf>
+      <url>https://repo.maven.apache.org/maven2</url>
+      <blocked>false</blocked>
+    </mirror>
+  </mirrors>
+</settings>
